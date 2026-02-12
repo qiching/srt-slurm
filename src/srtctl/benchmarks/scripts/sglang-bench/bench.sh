@@ -53,7 +53,7 @@ for concurrency in "${CONCURRENCY_LIST[@]}"; do
 
     set -x
     python3 -m sglang.bench_serving \
-        --backend sglang \
+        --backend sglang-oai \
         --model "${MODEL_NAME}" \
         --host "${HOST}" --port "${PORT}" \
         --dataset-name random \

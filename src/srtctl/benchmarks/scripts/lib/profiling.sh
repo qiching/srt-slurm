@@ -144,17 +144,29 @@ start_all_profiling() {
     local agg_output_dir="${PROFILE_AGG_OUTPUT_DIR:-${PROFILE_OUTPUT_DIR}/agg}"
 
     mkdir -p "${PROFILE_OUTPUT_DIR}" 2>/dev/null || true
-    mkdir -p "${prefill_output_dir}" 2>/dev/null || true
-    mkdir -p "${decode_output_dir}" 2>/dev/null || true
-    mkdir -p "${agg_output_dir}" 2>/dev/null || true
+    if [[ -n "${PROFILE_PREFILL_ENDPOINTS}" ]]; then
+        mkdir -p "${prefill_output_dir}" 2>/dev/null || true
+    fi
+    if [[ -n "${PROFILE_DECODE_ENDPOINTS}" ]]; then
+        mkdir -p "${decode_output_dir}" 2>/dev/null || true
+    fi
+    if [[ -n "${PROFILE_AGG_ENDPOINTS}" ]]; then
+        mkdir -p "${agg_output_dir}" 2>/dev/null || true
+    fi
 
     echo ""
     echo "Starting profiling on workers..."
     echo "  Type: ${PROFILE_TYPE}"
     echo "  Output (base): ${PROFILE_OUTPUT_DIR}"
-    echo "  Output (prefill): ${prefill_output_dir}"
-    echo "  Output (decode): ${decode_output_dir}"
-    echo "  Output (agg): ${agg_output_dir}"
+    if [[ -n "${PROFILE_PREFILL_ENDPOINTS}" ]]; then
+        echo "  Output (prefill): ${prefill_output_dir}"
+    fi
+    if [[ -n "${PROFILE_DECODE_ENDPOINTS}" ]]; then
+        echo "  Output (decode): ${decode_output_dir}"
+    fi
+    if [[ -n "${PROFILE_AGG_ENDPOINTS}" ]]; then
+        echo "  Output (agg): ${agg_output_dir}"
+    fi
     echo "  Prefill workers: ${PROFILE_PREFILL_ENDPOINTS:-none}"
     echo "  Decode workers: ${PROFILE_DECODE_ENDPOINTS:-none}"
     echo "  Prefill steps: ${PROFILE_PREFILL_START_STEP} - ${PROFILE_PREFILL_STOP_STEP}"
