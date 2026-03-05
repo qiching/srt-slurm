@@ -28,7 +28,9 @@ if [ ! -f "$NVSHMEM_LIB/libnvshmem_host.so" ] && [ -f "$NVSHMEM_LIB/libnvshmem_h
 fi
 
 # Apply kNumMaxTopK=16 patch (Qwen3.5 uses topk=10, default kNumMaxTopK=8 is insufficient)
-sed -i 's/kNumMaxTop[Kk][[:space:]]*=[[:space:]]*[0-9][0-9]*/kNumMaxTopK = 16/g' csrc/kernels/internode_ll.cu
+# Note: source has both kNumMaxTopK (uppercase) and kNumMaxTopk (lowercase) as separate variables
+sed -i 's/kNumMaxTopK[[:space:]]*=[[:space:]]*[0-9][0-9]*/kNumMaxTopK = 16/g' csrc/kernels/internode_ll.cu
+sed -i 's/kNumMaxTopk[[:space:]]*=[[:space:]]*[0-9][0-9]*/kNumMaxTopk = 16/g' csrc/kernels/internode_ll.cu
 
 # Verify the patch was applied
 grep -q "kNumMaxTop. = 16" csrc/kernels/internode_ll.cu && echo "Patch verified: kNumMaxTopK/k=16" || {
