@@ -721,6 +721,7 @@ class DynamoConfig:
 
         return (
             f"echo 'Installing dynamo from source ({git_ref})...' && "
+            "apt-get update -qq && apt-get install -y -qq libclang-dev > /dev/null 2>&1 && "
             "cd /sgl-workspace/ && "
             "git clone https://github.com/ai-dynamo/dynamo.git && "
             "cd dynamo && "
