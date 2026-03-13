@@ -526,6 +526,10 @@ class BenchmarkConfig:
     num_threads: int | None = None
     max_context_length: int | None = None
     categories: list[str] | None = None
+    num_shots: int | None = None  # GSM8K few-shot examples
+    temperature: float | None = None
+    top_p: float | None = None
+    top_k: int | None = None
     # Router benchmark fields
     num_requests: int | None = None
     concurrency: int | None = None
@@ -534,6 +538,7 @@ class BenchmarkConfig:
     mooncake_workload: str | None = None  # "mooncake", "conversation", "synthetic", "toolagent"
     ttft_threshold_ms: int | None = None  # Goodput TTFT threshold in ms (default: 2000)
     itl_threshold_ms: int | None = None  # Goodput ITL threshold in ms (default: 25)
+    random_range_ratio: float | None = None  # Random input/output length range ratio (default: 0.8)
 
     def get_concurrency_list(self) -> list[int]:
         if self.concurrencies is None:
@@ -563,17 +568,10 @@ class ProfilingConfig:
     - nsys: NVIDIA Nsight Systems profiling (wraps command with nsys profile)
     - torch: PyTorch profiler (uses SGLANG_TORCH_PROFILER_DIR)
 
-    When profiling is enabled, workers use sglang.launch_server instead of dynamo.sglang.
-
-    Traffic generator parameters (isl, osl, concurrency) are specified at the top level
-    and used for all phases. Per-phase start_step/stop_step are specified in the
-    prefill/decode/aggregated sections.
+    Per-phase start_step/stop_step are specified in the prefill/decode/aggregated sections.
     """
 
     type: str = "none"  # "none", "nsys", or "torch"
-    isl: int | None = None  # Input sequence length for profiling workload
-    osl: int | None = None  # Output sequence length for profiling workload
-    concurrency: int | None = None  # Batch size / concurrency
 
     # Phase-specific profiling step configs
     prefill: ProfilingPhaseConfig | None = None
@@ -618,17 +616,7 @@ class ProfilingConfig:
         if not self.enabled:
             return {}
 
-        env = {
-            "PROFILING_MODE": mode,
-        }
-
-        # Traffic generator params (same for all phases)
-        if self.isl is not None:
-            env["PROFILE_ISL"] = str(self.isl)
-        if self.osl is not None:
-            env["PROFILE_OSL"] = str(self.osl)
-        if self.concurrency is not None:
-            env["PROFILE_CONCURRENCY"] = str(self.concurrency)
+        env = {"PROFILING_MODE": mode, "PROFILE_TYPE": self.type}
 
         # Phase-specific start/stop steps
         phase_config = self._get_phase_config(mode)
@@ -644,11 +632,13 @@ class ProfilingConfig:
 
         return env
 
-    def get_nsys_prefix(self, output_file: str) -> list[str]:
+    def get_nsys_prefix(self, output_file: str, *, frontend_type: str | None = None) -> list[str]:
         """Get nsys profiling command prefix.
 
         Args:
             output_file: Path for nsys output file (without extension)
+            frontend_type: Frontend type (e.g., "dynamo", "sglangrouter"). When set to "dynamo",
+                add flags required for Dynamo's process model.
 
         Returns:
             Command prefix list for nsys profiling
@@ -656,7 +646,7 @@ class ProfilingConfig:
         if not self.is_nsys:
             return []
 
-        return [
+        cmd = [
             "nsys",
             "profile",
             "-t",
@@ -671,6 +661,11 @@ class ProfilingConfig:
             "-o",
             output_file,
         ]
+
+        if frontend_type == "dynamo":
+            cmd.insert(-2, "--trace-fork-before-exec=true")
+
+        return cmd
 
     Schema: ClassVar[builtins.type[Schema]] = Schema
 
@@ -693,7 +688,7 @@ class DynamoConfig:
     """
 
     install: bool = True
-    version: str | None = "0.8.0"
+    version: str | None = "1.0.0"
     hash: str | None = None
     top_of_tree: bool = False
 
@@ -721,22 +716,19 @@ class DynamoConfig:
             )
 
         # Source install (hash or top-of-tree)
-        git_ref = self.hash if self.hash else "HEAD"
+        git_ref = self.hash if self.hash else "main"
         checkout_cmd = f"git checkout {self.hash}" if self.hash else ""
 
         return (
             f"echo 'Installing dynamo from source ({git_ref})...' && "
-            "cd /sgl-workspace/ && "
+            # Install git if not available (vLLM containers don't have it)
+            "( command -v git > /dev/null 2>&1 || "
+            "(apt-get update -qq && apt-get install -y -qq git > /dev/null 2>&1) ) && "
+            "cd /tmp && "
             "git clone https://github.com/ai-dynamo/dynamo.git && "
             "cd dynamo && "
             f"{checkout_cmd + ' && ' if checkout_cmd else ''}"
-            "cd lib/bindings/python/ && "
-            'export RUSTFLAGS="${RUSTFLAGS:-} -C target-cpu=native" && '
-            "maturin build -o /tmp && "
-            "pip install /tmp/ai_dynamo_runtime*.whl && "
-            "cd /sgl-workspace/dynamo/ && "
-            "pip install -e . && "
-            "cd /sgl-workspace/sglang/ && "
+            "pip install --break-system-packages --quiet -e . && "
             f"echo 'Dynamo installed from source ({git_ref})'"
         )
 
@@ -860,13 +852,6 @@ class SrtConfig:
         if not prof.enabled:
             return
 
-        # Traffic generator params are required when profiling is enabled
-        if prof.isl is None or prof.osl is None or prof.concurrency is None:
-            raise ValidationError(
-                "profiling.isl/osl/concurrency must be set when profiling is enabled. "
-                f"Got isl={prof.isl}, osl={prof.osl}, concurrency={prof.concurrency}"
-            )
-
         r = self.resources
         is_disaggregated = r.is_disaggregated
         has_prefill_prof = prof.prefill is not None
@@ -884,6 +869,8 @@ class SrtConfig:
                     "Disaggregated mode requires both profiling.prefill and profiling.decode "
                     "to be set when profiling is enabled."
                 )
+            if (r.prefill_workers or 0) <= 0 or (r.decode_workers or 0) <= 0:
+                raise ValidationError("Disaggregated mode requires prefill_workers and decode_workers to be > 0.")
         else:
             if has_prefill_prof or has_decode_prof:
                 raise ValidationError(
@@ -893,19 +880,8 @@ class SrtConfig:
                 raise ValidationError(
                     "Aggregated mode requires profiling.aggregated to be set when profiling is enabled."
                 )
-
-        # Profiling requires single worker per role
-        if is_disaggregated:
-            if r.num_prefill != 1 or r.num_decode != 1:
-                raise ValidationError(
-                    f"Profiling mode requires exactly 1 prefill and 1 decode worker. "
-                    f"Got prefill_workers={r.num_prefill}, decode_workers={r.num_decode}"
-                )
-        else:
-            if r.num_agg != 1:
-                raise ValidationError(
-                    f"Profiling mode requires exactly 1 aggregated worker. Got agg_workers={r.num_agg}"
-                )
+            if (r.agg_workers or 0) <= 0:
+                raise ValidationError("Aggregated mode requires agg_workers to be > 0.")
 
     @classmethod
     def from_yaml(cls, yaml_path: Path) -> "SrtConfig":

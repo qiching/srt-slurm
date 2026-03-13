@@ -278,7 +278,6 @@ class VLLMProtocol:
         endpoint_processes: list[Process],
         runtime: RuntimeContext,
         frontend_type: str = "dynamo",
-        profiling_enabled: bool = False,
         nsys_prefix: list[str] | None = None,
         dump_config_path: Path | None = None,
     ) -> list[str]:
@@ -289,7 +288,6 @@ class VLLMProtocol:
             endpoint_processes: All processes for this endpoint (for multi-node)
             runtime: Runtime context with paths and settings
             frontend_type: Frontend type (currently only "dynamo" supported for vLLM)
-            profiling_enabled: Whether profiling is enabled
             nsys_prefix: Optional nsys profiling command prefix
             dump_config_path: Path to dump config JSON
         """
@@ -341,10 +339,18 @@ class VLLMProtocol:
         mode_connector = config.pop("connector", None)
         connector = mode_connector if mode_connector is not None else self.connector
 
-        if isinstance(connector, list):
-            cmd.extend(["--connector"] + connector)
-        elif connector and connector not in ("null", "none", None):
-            cmd.extend(["--connector", connector])
+        if connector and connector not in ("null", "none", None):
+            # dynamo 1.0.0+: --connector is removed, use --kv-transfer-config
+            connector_map = {
+                "nixl": '{"kv_connector":"NixlConnector","kv_role":"kv_both"}',
+                "lmcache": '{"kv_connector":"LMCacheConnectorV1","kv_role":"kv_both"}',
+            }
+            if isinstance(connector, str) and connector.lower() in connector_map:
+                cmd.extend(["--kv-transfer-config", connector_map[connector.lower()]])
+            elif isinstance(connector, str):
+                # Assume it's already a JSON config string
+                cmd.extend(["--kv-transfer-config", connector])
+
 
         # Check if this is DP+EP mode (data-parallel-size set)
         is_dp_mode = self._is_dp_mode(mode)
