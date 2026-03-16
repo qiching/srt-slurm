@@ -1244,3 +1244,129 @@ class TestVLLMDataParallelMode:
         # But should still have multi-node flags
         assert "--master-addr" in cmd
         assert "--nnodes" in cmd
+
+    # =========================================================================
+    # Connector → --kv-transfer-config tests (dynamo 1.0.0+)
+    # =========================================================================
+
+    def _build_cmd_with_connector(self, connector, mode="agg", mode_connector=None):
+        """Helper: build a vLLM worker command with the given connector setting."""
+        from pathlib import Path
+        from unittest.mock import MagicMock, patch
+
+        from srtctl.backends import VLLMProtocol, VLLMServerConfig
+        from srtctl.core.topology import Process
+
+        mode_config: dict = {}
+        if mode_connector is not None:
+            mode_config["connector"] = mode_connector
+
+        vllm_cfg_kwargs = {("aggregated" if mode == "agg" else mode): mode_config or None}
+        backend = VLLMProtocol(
+            connector=connector,
+            vllm_config=VLLMServerConfig(**vllm_cfg_kwargs),
+        )
+
+        process = Process(
+            node="node0",
+            gpu_indices=frozenset([0, 1, 2, 3]),
+            sys_port=8081,
+            http_port=30000,
+            endpoint_mode=mode,
+            endpoint_index=0,
+            node_rank=0,
+        )
+
+        mock_runtime = MagicMock()
+        mock_runtime.model_path = Path("/model")
+        mock_runtime.is_hf_model = False
+
+        with patch("srtctl.core.slurm.get_hostname_ip", return_value="10.0.0.1"):
+            return backend.build_worker_command(
+                process=process,
+                endpoint_processes=[process],
+                runtime=mock_runtime,
+            )
+
+    def test_connector_nixl_generates_kv_transfer_config(self):
+        """connector: nixl → --kv-transfer-config with NixlConnector JSON."""
+        import json
+
+        cmd = self._build_cmd_with_connector("nixl")
+        assert "--kv-transfer-config" in cmd
+        assert "--connector" not in cmd
+        idx = cmd.index("--kv-transfer-config")
+        cfg = json.loads(cmd[idx + 1])
+        assert cfg["kv_connector"] == "NixlConnector"
+        assert cfg["kv_role"] == "kv_both"
+
+    def test_connector_lmcache_generates_kv_transfer_config(self):
+        """connector: lmcache → --kv-transfer-config with LMCacheConnectorV1 JSON."""
+        import json
+
+        cmd = self._build_cmd_with_connector("lmcache")
+        idx = cmd.index("--kv-transfer-config")
+        cfg = json.loads(cmd[idx + 1])
+        assert cfg["kv_connector"] == "LMCacheConnectorV1"
+
+    def test_connector_custom_json_passthrough(self):
+        """connector set to a raw JSON string is passed through as-is."""
+        import json
+
+        custom = '{"kv_connector":"MyCustomConnector","kv_role":"kv_both"}'
+        cmd = self._build_cmd_with_connector(custom)
+        idx = cmd.index("--kv-transfer-config")
+        assert cmd[idx + 1] == custom
+
+    def test_connector_null_skips_flag(self):
+        """connector: null should not emit --kv-transfer-config."""
+        cmd = self._build_cmd_with_connector(None)
+        assert "--kv-transfer-config" not in cmd
+        assert "--connector" not in cmd
+
+    def test_connector_none_string_skips_flag(self):
+        """connector: 'none' should not emit --kv-transfer-config."""
+        cmd = self._build_cmd_with_connector("none")
+        assert "--kv-transfer-config" not in cmd
+
+    def test_connector_kvbm_generates_kv_transfer_config(self):
+        """connector: kvbm → --kv-transfer-config with DynamoConnector JSON."""
+        import json
+
+        cmd = self._build_cmd_with_connector("kvbm")
+        idx = cmd.index("--kv-transfer-config")
+        cfg = json.loads(cmd[idx + 1])
+        assert cfg["kv_connector"] == "DynamoConnector"
+        assert cfg["kv_connector_module_path"] == "kvbm.vllm_integration.connector"
+
+    def test_mode_connector_overrides_default(self):
+        """Per-mode connector override takes precedence over default."""
+        import json
+
+        cmd = self._build_cmd_with_connector("nixl", mode="agg", mode_connector="lmcache")
+        idx = cmd.index("--kv-transfer-config")
+        cfg = json.loads(cmd[idx + 1])
+        assert cfg["kv_connector"] == "LMCacheConnectorV1"
+
+    def test_disaggregation_mode_flag_for_prefill(self):
+        """Prefill mode emits --disaggregation-mode prefill (not --is-prefill-worker)."""
+        cmd = self._build_cmd_with_connector("nixl", mode="prefill")
+        assert "--disaggregation-mode" in cmd
+        idx = cmd.index("--disaggregation-mode")
+        assert cmd[idx + 1] == "prefill"
+        assert "--is-prefill-worker" not in cmd
+
+    def test_disaggregation_mode_flag_for_decode(self):
+        """Decode mode emits --disaggregation-mode decode (not --is-decode-worker)."""
+        cmd = self._build_cmd_with_connector("nixl", mode="decode")
+        assert "--disaggregation-mode" in cmd
+        idx = cmd.index("--disaggregation-mode")
+        assert cmd[idx + 1] == "decode"
+        assert "--is-decode-worker" not in cmd
+
+    def test_agg_mode_no_disaggregation_flag(self):
+        """Aggregated mode should not emit any disaggregation flag."""
+        cmd = self._build_cmd_with_connector("nixl", mode="agg")
+        assert "--disaggregation-mode" not in cmd
+        assert "--is-prefill-worker" not in cmd
+        assert "--is-decode-worker" not in cmd
