@@ -10,6 +10,7 @@ Uses dynamo.vllm integration module.
 from __future__ import annotations
 
 import builtins
+import json
 from collections.abc import Sequence
 from dataclasses import field
 from pathlib import Path
@@ -55,17 +56,20 @@ class VLLMProtocol:
     This frozen dataclass both holds configuration AND implements the
     BackendProtocol methods for process allocation and launching.
 
+    dynamo 1.0.0+: ``--connector`` was removed; the ``connector`` field is now
+    translated to ``--kv-transfer-config`` with the appropriate JSON payload.
+
     Example YAML:
         backend:
           type: vllm
-          connector: nixl  # default connector (can be overridden per mode)
+          connector: nixl  # translated to --kv-transfer-config JSON
           prefill_environment:
             PYTHONUNBUFFERED: "1"
           vllm_config:
             prefill:
               tensor-parallel-size: 2
               gpu-memory-utilization: 0.9
-              connector: kvbm  # override connector for prefill
+              connector: lmcache  # override connector for prefill
             decode:
               tensor-parallel-size: 2
               gpu-memory-utilization: 0.85
@@ -82,10 +86,10 @@ class VLLMProtocol:
     # vLLM server CLI config per mode
     vllm_config: VLLMServerConfig | None = None
 
-    # Default KV connector(s): "nixl", "kvbm", ["kvbm", "nixl"], etc.
-    # Can be overridden per mode by setting "connector" in vllm_config.prefill/decode/aggregated
-    # Passed as --connector flag to dynamo.vllm
-    connector: str | list[str] | None = "nixl"
+    # Default KV connector: "nixl", "lmcache", or a raw JSON string for --kv-transfer-config.
+    # Can be overridden per mode by setting "connector" in vllm_config.prefill/decode/aggregated.
+    # dynamo 1.0.0+: translated to --kv-transfer-config (--connector was removed).
+    connector: str | None = "nixl"
 
     Schema: ClassVar[builtins.type[Schema]] = Schema
 
@@ -327,22 +331,19 @@ class VLLMProtocol:
             ]
         )
 
-        # Disaggregation flags (different from SGLang's --disaggregation-mode)
-        if mode == "prefill":
-            cmd.append("--is-prefill-worker")
-        elif mode == "decode":
-            cmd.append("--is-decode-worker")
-        # agg mode: no flag (default behavior)
+        # Disaggregation mode (dynamo 1.0.0+: --is-prefill-worker/--is-decode-worker are deprecated)
+        if mode in ("prefill", "decode"):
+            cmd.extend(["--disaggregation-mode", mode])
 
-        # KV connector - check for mode-specific override first, then fall back to default
-        # Pop from config so it doesn't get added again by _config_to_cli_args
+        # KV connector → --kv-transfer-config (dynamo 1.0.0+: --connector was removed)
+        # Check for mode-specific override first, then fall back to default.
+        # Pop from config so it doesn't get added again by _config_to_cli_args.
         mode_connector = config.pop("connector", None)
         connector = mode_connector if mode_connector is not None else self.connector
 
-        if isinstance(connector, list):
-            cmd.extend(["--connector"] + connector)
-        elif connector and connector not in ("null", "none", None):
-            cmd.extend(["--connector", connector])
+        if connector and connector not in ("null", "none", None):
+            kv_transfer_cfg = _connector_to_kv_transfer_config(connector)
+            cmd.extend(["--kv-transfer-config", kv_transfer_cfg])
 
         # Check if this is DP+EP mode (data-parallel-size set)
         is_dp_mode = self._is_dp_mode(mode)
@@ -390,6 +391,30 @@ class VLLMProtocol:
         cmd.extend(_config_to_cli_args(config))
 
         return cmd
+
+
+_CONNECTOR_MAP: dict[str, dict[str, str]] = {
+    "nixl": {"kv_connector": "NixlConnector", "kv_role": "kv_both"},
+    "lmcache": {"kv_connector": "LMCacheConnectorV1", "kv_role": "kv_both"},
+    "kvbm": {
+        "kv_connector": "DynamoConnector",
+        "kv_connector_module_path": "kvbm.vllm_integration.connector",
+        "kv_role": "kv_both",
+    },
+}
+
+
+def _connector_to_kv_transfer_config(connector: str) -> str:
+    """Translate a connector shorthand to a --kv-transfer-config JSON string.
+
+    Known shorthands (e.g. "nixl", "lmcache") are expanded to the full JSON
+    config expected by vLLM.  Anything else is passed through as-is (assumed
+    to already be a valid JSON string).
+    """
+    preset = _CONNECTOR_MAP.get(connector.lower())
+    if preset is not None:
+        return json.dumps(preset)
+    return connector
 
 
 def _config_to_cli_args(config: dict[str, Any]) -> list[str]:
