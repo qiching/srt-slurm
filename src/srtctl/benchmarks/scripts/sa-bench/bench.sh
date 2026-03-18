@@ -60,6 +60,7 @@ TOTAL_GPUS=${9:-0}
 PREFILL_GPUS=${10:-0}
 DECODE_GPUS=${11:-0}
 RANDOM_RANGE_RATIO=${12:-0.8}
+RANDOM_PREFIX_LEN=${13:-0}
 
 # Parse endpoint into host:port
 HOST=$(echo "$ENDPOINT" | sed 's|http://||' | cut -d: -f1)
@@ -115,10 +116,12 @@ for concurrency in "${CONCURRENCY_LIST[@]}"; do
         --random-input-len "$ISL" \
         --random-output-len "$OSL" \
         --random-range-ratio "${RANDOM_RANGE_RATIO}" \
+        --random-prefix-len "${RANDOM_PREFIX_LEN}" \
         --ignore-eos \
         --request-rate 250 \
         --percentile-metrics ttft,tpot,itl,e2el \
-        --max-concurrency "$concurrency"
+        --max-concurrency "$concurrency" \
+        --trust-remote-code
 
     num_prompts=$((concurrency * 10))
     
@@ -143,10 +146,12 @@ for concurrency in "${CONCURRENCY_LIST[@]}"; do
         --random-input-len "$ISL" \
         --random-output-len "$OSL" \
         --random-range-ratio "${RANDOM_RANGE_RATIO}" \
+        --random-prefix-len "${RANDOM_PREFIX_LEN}" \
         --ignore-eos \
         --request-rate "${REQ_RATE}" \
         --percentile-metrics ttft,tpot,itl,e2el \
         --max-concurrency "$concurrency" \
+        --trust-remote-code \
         --use-chat-template \
         --save-result --result-dir "$result_dir" --result-filename "$result_filename"
     set +x

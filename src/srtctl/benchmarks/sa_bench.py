@@ -97,5 +97,6 @@ class SABenchRunner(BenchmarkRunner):
             str(prefill_gpus),
             str(decode_gpus),
             str(b.random_range_ratio) if b.random_range_ratio is not None else "0.8",
+            str(b.random_prefix_len) if b.random_prefix_len is not None else "0",
         ]
         return cmd

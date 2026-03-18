@@ -1,0 +1,56 @@
+name: "kimi-vllm-agg-gb200-2nodes"
+
+model:
+  path: "kmfp4"
+  container: "/lustre/fsw/coreai_dlfw_dev/lijas/images/vllm+vllm-openai+cu130-nightly.sqsh"
+  precision: "fp4"
+
+dynamo:
+  version: 1.0.0
+  install: true
+
+setup_script: install-deps.sh
+
+
+resources:
+  gpu_type: "gb200"
+  gpus_per_node: 4
+  agg_nodes: 2
+  agg_workers: 1
+  gpus_per_agg: 8
+
+frontend:
+  type: dynamo
+  enable_multiple_frontends: false
+
+backend:
+  type: vllm
+  connector: null
+
+  aggregated_environment:
+    NCCL_CUMEM_ENABLE: "1"
+    NCCL_MNNVL_ENABLE: "1"
+    NCCL_NVLS_ENABLE: "1"
+    VLLM_USE_NCCL_SYMM_MEM: "1"
+    VLLM_FLASHINFER_MOE_BACKEND: "latency"
+
+  vllm_config:
+    aggregated:
+      served-model-name: "deepseek-ai/DeepSeek-R1"
+      tensor-parallel-size: 1
+      data-parallel-size: 8
+      data-parallel-rpc-port: 13345
+      enable-expert-parallel: true
+      max-model-len: 16384
+      max-num-seqs: 256
+      safetensors-load-strategy: "prefetch"
+      trust-remote-code: true
+      all2all-backend: "flashinfer_nvlink_one_sided"
+
+benchmark:
+  type: "sa-bench"
+  isl: 2
+  osl: 1024
+  concurrencies: "1024x2048x8192"
+  req_rate: "inf"
+  random_prefix_len: 8191
