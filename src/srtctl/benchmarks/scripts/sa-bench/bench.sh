@@ -61,6 +61,9 @@ PREFILL_GPUS=${10:-0}
 DECODE_GPUS=${11:-0}
 RANDOM_RANGE_RATIO=${12:-0.8}
 RANDOM_PREFIX_LEN=${13:-0}
+NUM_PROMPTS_OVERRIDE=${14:-0}
+WARMUP_PROMPTS_OVERRIDE=${15:--1}
+USE_CHAT_TEMPLATE=${16:-true}
 
 # Parse endpoint into host:port
 HOST=$(echo "$ENDPOINT" | sed 's|http://||' | cut -d: -f1)
@@ -105,7 +108,13 @@ start_all_profiling
 
 for concurrency in "${CONCURRENCY_LIST[@]}"; do
 
-    num_warmup_prompts=$((concurrency * 2))
+    if [ "$WARMUP_PROMPTS_OVERRIDE" -ge 0 ] 2>/dev/null; then
+        num_warmup_prompts=$WARMUP_PROMPTS_OVERRIDE
+    else
+        num_warmup_prompts=$((concurrency * 2))
+    fi
+
+    if [ "$num_warmup_prompts" -gt 0 ]; then
     python3 -u "${WORK_DIR}/benchmark_serving.py" \
         --model "${MODEL_NAME}" --tokenizer "${MODEL_PATH}" \
         --host "$HOST" --port "$PORT" \
@@ -122,8 +131,16 @@ for concurrency in "${CONCURRENCY_LIST[@]}"; do
         --percentile-metrics ttft,tpot,itl,e2el \
         --max-concurrency "$concurrency" \
         --trust-remote-code
+    echo "Warmup complete ($num_warmup_prompts prompts)"
+    else
+        echo "Skipping warmup (warmup_prompts=0)"
+    fi
 
-    num_prompts=$((concurrency * 10))
+    if [ "$NUM_PROMPTS_OVERRIDE" -gt 0 ] 2>/dev/null; then
+        num_prompts=$NUM_PROMPTS_OVERRIDE
+    else
+        num_prompts=$((concurrency * 10))
+    fi
     
     # Generate result filename based on mode
     if [ "$IS_DISAGGREGATED" = "true" ]; then
@@ -152,7 +169,7 @@ for concurrency in "${CONCURRENCY_LIST[@]}"; do
         --percentile-metrics ttft,tpot,itl,e2el \
         --max-concurrency "$concurrency" \
         --trust-remote-code \
-        --use-chat-template \
+        $([ "$USE_CHAT_TEMPLATE" = "true" ] && echo "--use-chat-template") \
         --save-result --result-dir "$result_dir" --result-filename "$result_filename"
     set +x
 

@@ -540,6 +540,9 @@ class BenchmarkConfig:
     itl_threshold_ms: int | None = None  # Goodput ITL threshold in ms (default: 25)
     random_range_ratio: float | None = None  # Random input/output length range ratio (default: 0.8)
     random_prefix_len: int | None = None  # Number of fixed shared prefix tokens (default: 0)
+    num_prompts: int | None = None  # Number of prompts per concurrency level (default: concurrency*10)
+    warmup_prompts: int | None = None  # Number of warmup prompts per concurrency level (default: concurrency*2, 0 to skip)
+    use_chat_template: bool = True  # Wrap prompts in chat template (subtracts template len from ISL)
 
     def get_concurrency_list(self) -> list[int]:
         if self.concurrencies is None:

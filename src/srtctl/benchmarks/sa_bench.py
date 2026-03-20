@@ -98,5 +98,8 @@ class SABenchRunner(BenchmarkRunner):
             str(decode_gpus),
             str(b.random_range_ratio) if b.random_range_ratio is not None else "0.8",
             str(b.random_prefix_len) if b.random_prefix_len is not None else "0",
+            str(b.num_prompts) if b.num_prompts is not None else "0",
+            str(b.warmup_prompts) if b.warmup_prompts is not None else "-1",
+            str(b.use_chat_template).lower(),
         ]
         return cmd

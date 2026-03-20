@@ -1,0 +1,64 @@
+name: "kimi-vllm-agg-gb200-2nodes"
+
+model:
+  path: "kmfp4"
+  container: "/lustre/fsw/coreai_dlfw_dev/lijas/images/vllm+vllm-openai+cu130-nightly.sqsh"
+  precision: "fp4"
+
+dynamo:
+  version: 1.0.0
+  install: true
+
+setup_script: install-deps.sh
+
+resources:
+  gpu_type: "gb200"
+  gpus_per_node: 4
+  agg_nodes: 2
+  agg_workers: 1
+  gpus_per_agg: 8
+
+frontend:
+  type: dynamo
+  enable_multiple_frontends: false
+
+backend:
+  type: vllm
+  connector: null
+
+  aggregated_environment:
+    VLLM_USE_FLASHINFER_MOE_FP4: "1"
+    VLLM_USE_NCCL_SYMM_MEM: "1"
+
+  vllm_config:
+    aggregated:
+      kv-cache-dtype: "fp8"
+      tensor-parallel-size: 1
+      pipeline-parallel-size: 1
+      data-parallel-size: 8
+      data-parallel-rpc-port: 13345
+      enable-expert-parallel: true
+      max-model-len: 10240
+      max-num-seqs: 1024
+      max-num-batched-tokens: 10240
+      safetensors-load-strategy: "prefetch"
+      trust-remote-code: true
+      no-enable-prefix-caching: true
+      no-enable-chunked-prefill: true
+      async-scheduling: true
+      all2all-backend: "allgather_reducescatter"
+      compilation-config: '{"cudagraph_mode":"FULL_DECODE_ONLY","custom_ops":["+quant_fp8","+rms_norm","+rotary_embedding"],"pass_config":{"fuse_attn_quant":true,"fuse_allreduce_rms":true}}'
+      gpu-memory-utilization: 0.9
+      stream-interval: 50
+      max-cudagraph-capture-size: 1024
+
+benchmark:
+  type: "sa-bench"
+  isl: 10
+  osl: 1024
+  concurrencies: "2048"
+  num_prompts: 4096
+  warmup_prompts: 1
+  use_chat_template: false 
+  req_rate: "inf"
+  random_range_ratio: 1.0
