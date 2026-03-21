@@ -17,6 +17,7 @@ class TestBenchmarkRegistry:
         benchmarks = list_benchmarks()
         assert "sa-bench" in benchmarks
         assert "sglang-bench" in benchmarks
+        assert "vllm-bench" in benchmarks
         assert "mmlu" in benchmarks
         assert "gpqa" in benchmarks
         assert "longbenchv2" in benchmarks
@@ -159,6 +160,108 @@ class TestSGLangBenchRunner:
         ]
 
 
+class TestVllmBenchRunner:
+    """Test vLLM-Bench runner."""
+
+    def test_validate_config_valid(self):
+        from srtctl.benchmarks.vllm_bench import VllmBenchRunner
+        from srtctl.core.schema import BenchmarkConfig, ModelConfig, ResourceConfig, SrtConfig
+
+        runner = VllmBenchRunner()
+        config = SrtConfig(
+            name="test",
+            model=ModelConfig(path="/model", container="/image", precision="fp4"),
+            resources=ResourceConfig(gpu_type="h100"),
+            benchmark=BenchmarkConfig(type="vllm-bench", isl=1024, osl=1024, concurrencies="4x8", req_rate="inf"),
+        )
+        errors = runner.validate_config(config)
+        assert errors == []
+
+    def test_validate_config_missing_fields(self):
+        from srtctl.benchmarks.vllm_bench import VllmBenchRunner
+        from srtctl.core.schema import BenchmarkConfig, ModelConfig, ResourceConfig, SrtConfig
+
+        runner = VllmBenchRunner()
+        config = SrtConfig(
+            name="test",
+            model=ModelConfig(path="/model", container="/image", precision="fp4"),
+            resources=ResourceConfig(gpu_type="h100"),
+            benchmark=BenchmarkConfig(type="vllm-bench"),
+        )
+        errors = runner.validate_config(config)
+        assert any("benchmark.isl is required" in e for e in errors)
+        assert any("benchmark.osl is required" in e for e in errors)
+        assert any("benchmark.concurrencies is required" in e for e in errors)
+
+    def test_validate_config_rejects_zero_values(self):
+        from srtctl.benchmarks.vllm_bench import VllmBenchRunner
+        from srtctl.core.schema import BenchmarkConfig, ModelConfig, ResourceConfig, SrtConfig
+
+        runner = VllmBenchRunner()
+        config = SrtConfig(
+            name="test",
+            model=ModelConfig(path="/model", container="/image", precision="fp4"),
+            resources=ResourceConfig(gpu_type="h100"),
+            benchmark=BenchmarkConfig(type="vllm-bench", isl=0, osl=1, concurrencies=[0], req_rate=0),
+        )
+        errors = runner.validate_config(config)
+        assert any("benchmark.isl must be a positive integer" in e for e in errors)
+        assert any("benchmark.concurrencies values must be positive integers" in e for e in errors)
+        assert any(
+            "benchmark.req_rate must be a positive integer" in e or "benchmark.req_rate must be a positive number" in e
+            for e in errors
+        )
+
+    def test_build_command(self):
+        from unittest.mock import MagicMock
+
+        from srtctl.benchmarks.vllm_bench import VllmBenchRunner
+        from srtctl.core.schema import BenchmarkConfig, ModelConfig, ResourceConfig, SrtConfig
+
+        runner = VllmBenchRunner()
+        runtime = MagicMock()
+        runtime.frontend_port = 8000
+
+        config = SrtConfig(
+            name="test",
+            model=ModelConfig(path="/model", container="/image", precision="fp4"),
+            resources=ResourceConfig(gpu_type="h100"),
+            benchmark=BenchmarkConfig(type="vllm-bench", isl=1024, osl=128, concurrencies=[1, 2]),
+        )
+
+        cmd = runner.build_command(config, runtime)
+        assert cmd == [
+            "bash",
+            "/srtctl-benchmarks/vllm-bench/bench.sh",
+            "http://localhost:8000",
+            "1024",
+            "128",
+            "1x2",
+            "inf",
+            "0",  # num_prompts default (0 = concurrency*10)
+        ]
+
+    def test_build_command_with_num_prompts(self):
+        from unittest.mock import MagicMock
+
+        from srtctl.benchmarks.vllm_bench import VllmBenchRunner
+        from srtctl.core.schema import BenchmarkConfig, ModelConfig, ResourceConfig, SrtConfig
+
+        runner = VllmBenchRunner()
+        runtime = MagicMock()
+        runtime.frontend_port = 8000
+
+        config = SrtConfig(
+            name="test",
+            model=ModelConfig(path="/model", container="/image", precision="fp4"),
+            resources=ResourceConfig(gpu_type="h100"),
+            benchmark=BenchmarkConfig(type="vllm-bench", isl=1024, osl=128, concurrencies="16x32", num_prompts=500),
+        )
+
+        cmd = runner.build_command(config, runtime)
+        assert cmd[7] == "500"
+
+
 class TestMooncakeRouterRunner:
     """Test Mooncake Router benchmark runner."""
 
@@ -203,6 +306,11 @@ class TestScriptsExist:
     def test_sa_bench_script_exists(self):
         """SA-Bench script exists."""
         script = SCRIPTS_DIR / "sa-bench" / "bench.sh"
+        assert script.exists()
+
+    def test_vllm_bench_script_exists(self):
+        """vLLM-Bench script exists."""
+        script = SCRIPTS_DIR / "vllm-bench" / "bench.sh"
         assert script.exists()
 
     def test_mmlu_script_exists(self):
