@@ -253,12 +253,9 @@ class BenchmarkStageMixin:
         if agg_endpoints:
             env["PROFILE_AGG_ENDPOINTS"] = ",".join(agg_endpoints)
 
-        # Set profile output directory and common env vars for benchmarks that support profiling
+        # Set profile output directory for benchmarks that support profiling
         if runner.name in ("SA-Bench", "SGLang-Bench", "vLLM-Bench"):
             env["PROFILE_OUTPUT_DIR"] = profiles_dir_in_container
-            env["BENCH_MODEL_NAME"] = self.config.served_model_name
-            env["HEAD_NODE"] = self.runtime.nodes.head
-            env["HEAD_PORT"] = str(self.runtime.frontend_port)
 
         return env
 
@@ -284,6 +281,9 @@ class BenchmarkStageMixin:
 
         env = self._get_benchmark_profiling_env(runner)
         env["SRTCTL_FRONTEND_TYPE"] = self.config.frontend.type
+        env["BENCH_MODEL_NAME"] = self.config.served_model_name
+        env["HEAD_NODE"] = self.runtime.nodes.head
+        env["HEAD_PORT"] = str(self.runtime.frontend_port)
 
         # Add AIPerf metrics URLs for AIPerf-driven benchmarks
         if isinstance(runner, AIPerfBenchmarkRunner):
